@@ -10,30 +10,45 @@ const int NUM_TEAMS = 20;
 const int NUM_SIMS = 100000;
 
 std::mt19937 rng(42);
-std::uniform_real_distribution<float> dist(0.0f, 1.0f);
 
 // team structure
 struct Team {
-    float rating;
+    int rating;
     int points;
+    int goal_diff;
+    int total_goals;
     std::string name;
 };
 
 // simulate a single game
 void simulate_game(Team &A, Team &B) {
-    float p_draw = 0.2f;
-    float p_win_total = 1.0f - p_draw;
-    float total = A.rating + B.rating;
-    float pA_win = p_win_total * (A.rating / total);
-    float pB_win = p_win_total * (B.rating / total);
+    const float base_goals = 1.3f;
+    const float k = 0.002f;
+    const float home_adv = 0.2f;
 
-    float r = dist(rng);
+    int diff = A.rating - B.rating;
 
-    if (r < pA_win) {
+    float lambdaA = base_goals * std::exp(k * diff) + home_adv;
+    float lambdaB = base_goals * std::exp(-k * diff);
+
+    std::poisson_distribution<int> distA(lambdaA);
+    std::poisson_distribution<int> distB(lambdaB);
+
+    int goalsA = distA(rng);
+    int goalsB = distB(rng);
+
+    A.goal_diff += (goalsA - goalsB);
+    B.goal_diff += (goalsB - goalsA);
+    A.total_goals += goalsA;
+    B.total_goals += goalsB;
+
+    if (goalsA > goalsB) {
         A.points += 3;
-    } else if (r < pA_win + pB_win) {
+    }
+    else if (goalsB > goalsA) {
         B.points += 3;
-    } else {
+    }
+    else {
         A.points += 1;
         B.points += 1;
     }
@@ -44,6 +59,8 @@ void simulate_season(std::vector<Team> &teams) {
     // reset points
     for (auto &t : teams) {
         t.points = 0;
+        t.goal_diff = 0;
+        t.total_goals = 0;
     }
 
     // double round robin
@@ -55,49 +72,11 @@ void simulate_season(std::vector<Team> &teams) {
     }
 }
 
-// run Monte Carlo simulation
-int main() {
-    std::vector<Team> base_teams(NUM_TEAMS);
-
-    // initialize base teams
-    for (int i = 0; i < NUM_TEAMS; i++) {
-        base_teams[i].name = "Team " + std::to_string(i);
-        base_teams[i].rating = 0.5f + (float)i / NUM_TEAMS; // static ratings
-        base_teams[i].points = 0;
-    }
-
-    std::vector<int> win_count(NUM_TEAMS, 0);
-    std::vector<std::vector<int>> position_counts(NUM_TEAMS, std::vector<int>(NUM_TEAMS, 0));
-    std::vector<int> points_sum(NUM_TEAMS, 0.0);
-
-    auto start = std::chrono::high_resolution_clock::now();
-
-    for (int t = 0; t < NUM_SIMS; t++) {
-        std::vector<Team> teams = base_teams;
-
-        simulate_season(teams);
-
-        std::vector<int> ranking(NUM_TEAMS);
-        std::iota(ranking.begin(), ranking.end(), 0);
-
-        std::sort(ranking.begin(), ranking.end(), 
-                [&](int a, int b) {
-                    return teams[a].points > teams[b].points;
-                });
-        
-        win_count[ranking[0]]++;
-        for (int pos = 0; pos < NUM_TEAMS; pos++) {
-            int team = ranking[pos];
-            position_counts[team][pos]++;
-        }
-        for (int i = 0; i < NUM_TEAMS; i++) {
-            points_sum[i] += teams[i].points;
-        }
-    }
-
-    auto end = std::chrono::high_resolution_clock::now();
-
-    //print results
+void display_results(std::vector<int> win_count, 
+                     std::vector<std::vector<int>> position_counts, 
+                     std::vector<int> points_sum, 
+                     std::vector<Team> base_teams, 
+                     std::chrono::duration<float> elapsed) {
     std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
     for (int i = 0; i < NUM_TEAMS; i++) {
         float win_prob = (float)win_count[i] / NUM_SIMS;
@@ -120,11 +99,64 @@ int main() {
                   << avg_pts << "\n";
     }
 
-    std::chrono::duration<float> elapsed = end - start;
-
     std::cout << "\nExecution time: " << elapsed.count() << " seconds\n";
     std::cout << "Simulations per second: "
           << NUM_SIMS / elapsed.count();
+}
+
+// run Monte Carlo simulation
+int main() {
+    std::vector<Team> base_teams(NUM_TEAMS);
+
+    // initialize base teams
+    for (int i = 0; i < NUM_TEAMS; i++) {
+        base_teams[i].name = "Team " + std::to_string(i);
+        base_teams[i].rating = 1500 + i * 30; // static elo ratings
+        base_teams[i].points = 0;
+        base_teams[i].goal_diff = 0;
+        base_teams[i].total_goals = 0;
+    }
+
+    std::vector<int> win_count(NUM_TEAMS, 0);
+    std::vector<std::vector<int>> position_counts(NUM_TEAMS, std::vector<int>(NUM_TEAMS, 0));
+    std::vector<int> points_sum(NUM_TEAMS, 0);
+
+    auto start = std::chrono::high_resolution_clock::now();
+
+    for (int t = 0; t < NUM_SIMS; t++) {
+        std::vector<Team> teams = base_teams;
+
+        simulate_season(teams);
+
+        std::vector<int> ranking(NUM_TEAMS);
+        std::iota(ranking.begin(), ranking.end(), 0);
+
+        // sort by points, goal difference, total goals
+        std::sort(ranking.begin(), ranking.end(), 
+                [&](int a, int b) {
+                    if (teams[a].points != teams[b].points){
+                        return teams[a].points > teams[b].points;
+                    }
+                    if (teams[a].goal_diff != teams[b].goal_diff){
+                        return teams[a].goal_diff > teams[b].goal_diff;
+                    }
+                    return teams[a].total_goals > teams[b].total_goals;
+                });
+        
+        win_count[ranking[0]]++;
+        for (int pos = 0; pos < NUM_TEAMS; pos++) {
+            int team = ranking[pos];
+            position_counts[team][pos]++;
+        }
+        for (int i = 0; i < NUM_TEAMS; i++) {
+            points_sum[i] += teams[i].points;
+        }
+    }
+
+    auto end = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<float> elapsed = end - start;
+    display_results(win_count, position_counts, points_sum, base_teams, elapsed);
 
     return 0;
 }
