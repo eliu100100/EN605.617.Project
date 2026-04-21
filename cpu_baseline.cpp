@@ -5,9 +5,9 @@
 #include <numeric>
 #include <string>
 #include <chrono>
+#include "cpu_baseline.h"
 
 const int NUM_TEAMS = 20;
-const int NUM_SIMS = 100000;
 
 std::mt19937 rng(42);
 
@@ -72,11 +72,11 @@ void simulate_season(std::vector<Team> &teams) {
     }
 }
 
-void display_results(std::vector<int> win_count, 
-                     std::vector<std::vector<int>> position_counts, 
-                     std::vector<int> points_sum, 
-                     std::vector<Team> base_teams, 
-                     std::chrono::duration<float> elapsed) {
+void display_results(std::vector<int> win_count,
+                     std::vector<std::vector<int>> position_counts,
+                     std::vector<int> points_sum,
+                     std::vector<Team> base_teams,
+                     int NUM_SIMS) {
     std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
     for (int i = 0; i < NUM_TEAMS; i++) {
         float win_prob = (float)win_count[i] / NUM_SIMS;
@@ -98,14 +98,10 @@ void display_results(std::vector<int> win_count,
                   << relegation_prob << " | "
                   << avg_pts << "\n";
     }
-
-    std::cout << "\nExecution time: " << elapsed.count() << " seconds\n";
-    std::cout << "Simulations per second: "
-          << NUM_SIMS / elapsed.count();
 }
 
 // run Monte Carlo simulation
-int main() {
+float run_cpu_simulation(int NUM_SIMS) {
     std::vector<Team> base_teams(NUM_TEAMS);
 
     // initialize base teams
@@ -156,7 +152,6 @@ int main() {
     auto end = std::chrono::high_resolution_clock::now();
 
     std::chrono::duration<float> elapsed = end - start;
-    display_results(win_count, position_counts, points_sum, base_teams, elapsed);
-
-    return 0;
+    display_results(win_count, position_counts, points_sum, base_teams, NUM_SIMS);
+    return elapsed.count();
 }

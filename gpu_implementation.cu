@@ -9,8 +9,9 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
+#include "gpu_implementation.h"
+
 const int NUM_TEAMS = 20;
-const int NUM_SIMS = 100000;
 
 // initialize cuRAND state for each thread
 __global__ void init_rng (unsigned int seed, curandState_t* states) {
@@ -28,7 +29,8 @@ __global__ void simulate_seasons(
     int* win_counts,
     int* position_counts,
     int* point_sums,
-    curandState_t* states)
+    curandState_t* states,
+    int NUM_SIMS)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -137,10 +139,10 @@ __global__ void simulate_seasons(
     states[tid] = localState;
 }
 
-void display_results(std::vector<int> win_counts, 
-                     std::vector<int> position_counts, 
-                     std::vector<int> point_sums,  
-                     std::chrono::duration<float> elapsed) {
+void display_results(std::vector<int> win_counts,
+                     std::vector<int> position_counts,
+                     std::vector<int> point_sums,
+                     int NUM_SIMS) {
     std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
     for (int i = 0; i < NUM_TEAMS; i++) {
         float win_prob = (float)win_counts[i] / NUM_SIMS;
@@ -165,13 +167,9 @@ void display_results(std::vector<int> win_counts,
                   << relegation_prob << " | "
                   << avg_pts << "\n";
     }
-
-    std::cout << "\nExecution time: " << elapsed.count() << " seconds\n";
-    std::cout << "Simulations per second: "
-          << NUM_SIMS / elapsed.count();
 }
 
-int main() {
+float run_gpu_simulation(int NUM_SIMS) {
     // set static ratings for now 
     int h_ratings[NUM_TEAMS];
     for (int i = 0; i < NUM_TEAMS; i++) {
@@ -207,7 +205,7 @@ int main() {
     // run + time simulation
     auto start = std::chrono::high_resolution_clock::now();
     simulate_seasons<<<blocks, threads>>>(
-        d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states);
+        d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, NUM_SIMS);
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -221,7 +219,7 @@ int main() {
 
     //print results
     std::chrono::duration<float> elapsed = end - start;
-    display_results(win_counts, position_counts, point_sums, elapsed);
+    display_results(win_counts, position_counts, point_sums, NUM_SIMS);
 
     // free objects
     cudaFree(d_states);
@@ -229,4 +227,6 @@ int main() {
     cudaFree(d_position_counts);
     cudaFree(d_win_counts);
     cudaFree(d_ratings);
+
+    return elapsed.count();
 }
