@@ -30,11 +30,11 @@ __global__ void simulate_seasons(
     int* position_counts,
     int* point_sums,
     curandState_t* states,
-    int NUM_SIMS)
+    int num_sims)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
-    if (tid >= NUM_SIMS) return;
+    if (tid >= num_sims) return;
 
     // load cuRAND state for thread
     curandState_t localState = states[tid];
@@ -52,6 +52,25 @@ __global__ void simulate_seasons(
     for (int i = 0; i < NUM_TEAMS; i++) {
         total_goals[i] = 0;
     }
+    int ranking[NUM_TEAMS];
+    for (int i = 0; i < NUM_TEAMS; i++) {
+        ranking[i] = i;
+    }
+
+    // initialize shared memory arrays
+    extern __shared__ int shared_mem[];
+    int* s_win_counts = shared_mem;
+    int* s_point_sums = s_win_counts + NUM_TEAMS;
+    int* s_position_counts = s_point_sums + NUM_TEAMS;
+
+    for (int i = threadIdx.x; i < NUM_TEAMS; i += blockDim.x) {
+        s_win_counts[i] = 0;
+        s_point_sums[i] = 0;
+    }
+    for (int i = threadIdx.x; i < NUM_TEAMS * NUM_TEAMS; i += blockDim.x) {
+        s_position_counts[i] = 0;
+    }
+    __syncthreads();
 
     // simulate season
     for (int i = 0; i < NUM_TEAMS; i++) {
@@ -76,6 +95,7 @@ __global__ void simulate_seasons(
                 int goalsA = curand_poisson(&localState, lambdaA);
                 int goalsB = curand_poisson(&localState, lambdaB);
 
+                // keep track of goal differential + total goals
                 goal_diff[i] += (goalsA - goalsB);
                 goal_diff[j] += (goalsB - goalsA);
                 total_goals[i] += goalsA;
@@ -95,13 +115,8 @@ __global__ void simulate_seasons(
         }
     }
 
-    int ranking[20];
-    for (int i = 0; i < NUM_TEAMS; i++) {
-        ranking[i] = i;
-    }
-
-    // sort ranking based on points descending
-    // use goal differential and total goals as tiebreakers
+    // sort ranking based on Premier League rules
+    // ranked by total points, goal difference, goals scored
     for (int i = 1; i < NUM_TEAMS; i++) {
         int key = ranking[i];
         int j = i - 1;
@@ -123,18 +138,27 @@ __global__ void simulate_seasons(
         ranking[j + 1] = key;
     }
 
-    // update win counts, position counts, and point sums
+    // update shared memory
     int winner = ranking[0];
-    atomicAdd(&win_counts[winner], 1);
-
+    atomicAdd(&s_win_counts[winner], 1);
     for (int pos = 0; pos < NUM_TEAMS; pos++) {
         int team = ranking[pos];
-        atomicAdd(&position_counts[team * NUM_TEAMS + pos], 1);
+        atomicAdd(&s_position_counts[team * NUM_TEAMS + pos], 1);
     }
-
     for (int i = 0; i < NUM_TEAMS; i++) {
-        atomicAdd(&point_sums[i], points[i]);
+        atomicAdd(&s_point_sums[i], points[i]);
     }
+    __syncthreads();
+
+    // use shared memory to update global results
+    for (int i = threadIdx.x; i < NUM_TEAMS; i += blockDim.x) {
+        atomicAdd(&win_counts[i], s_win_counts[i]);
+        atomicAdd(&point_sums[i], s_point_sums[i]);
+    }
+    for (int i = threadIdx.x; i < NUM_TEAMS * NUM_TEAMS; i += blockDim.x) {
+        atomicAdd(&position_counts[i], s_position_counts[i]);
+    }
+    __syncthreads();
 
     states[tid] = localState;
 }
@@ -142,24 +166,24 @@ __global__ void simulate_seasons(
 void display_results(std::vector<int> win_counts,
                      std::vector<int> position_counts,
                      std::vector<int> point_sums,
-                     int NUM_SIMS) {
+                     int num_sims) {
     std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
     for (int i = 0; i < NUM_TEAMS; i++) {
-        float win_prob = (float)win_counts[i] / NUM_SIMS;
+        float win_prob = (float)win_counts[i] / num_sims;
 
         float top_4_prob = 0.0f;
         for (int pos = 0; pos < 4; pos++) {
             top_4_prob += position_counts[i * NUM_TEAMS + pos];
         }
-        top_4_prob /= (float)NUM_SIMS;
+        top_4_prob /= (float)num_sims;
 
         float relegation_prob = 0.0f;
         for (int pos = 17; pos < 20; pos++) {
             relegation_prob += position_counts[i * NUM_TEAMS + pos];
         }
-        relegation_prob /= (float)NUM_SIMS;
+        relegation_prob /= (float)num_sims;
 
-        float avg_pts = point_sums[i] / (float)NUM_SIMS;
+        float avg_pts = point_sums[i] / (float)num_sims;
 
         std::cout << i << " | "
                   << win_prob << " | "
@@ -169,7 +193,7 @@ void display_results(std::vector<int> win_counts,
     }
 }
 
-float run_gpu_simulation(int NUM_SIMS) {
+float run_gpu_simulation(int num_sims, int block_size) {
     // set static ratings for now 
     int h_ratings[NUM_TEAMS];
     for (int i = 0; i < NUM_TEAMS; i++) {
@@ -193,19 +217,20 @@ float run_gpu_simulation(int NUM_SIMS) {
     cudaMemset(d_point_sums, 0, NUM_TEAMS * sizeof(int));
 
     curandState_t* d_states;
-    cudaMalloc(&d_states, NUM_SIMS * sizeof(curandState_t));
+    cudaMalloc(&d_states, num_sims * sizeof(curandState_t));
 
-    // set blocks + threads
-    int threads = 256;
-    int blocks = (NUM_SIMS + threads - 1) / threads;
+    // set blocks based on block size
+    int blocks = (num_sims + block_size - 1) / block_size;
 
     // initialize cuRAND states
-    init_rng<<<blocks, threads>>>(42, d_states);
+    init_rng<<<blocks, block_size>>>(42, d_states);
+
+    size_t shared_mem = (NUM_TEAMS + NUM_TEAMS + NUM_TEAMS * NUM_TEAMS) * sizeof(int);
 
     // run + time simulation
     auto start = std::chrono::high_resolution_clock::now();
-    simulate_seasons<<<blocks, threads>>>(
-        d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, NUM_SIMS);
+    simulate_seasons<<<blocks, block_size, shared_mem>>>(
+        d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, num_sims);
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -219,7 +244,7 @@ float run_gpu_simulation(int NUM_SIMS) {
 
     //print results
     std::chrono::duration<float> elapsed = end - start;
-    display_results(win_counts, position_counts, point_sums, NUM_SIMS);
+    display_results(win_counts, position_counts, point_sums, num_sims);
 
     // free objects
     cudaFree(d_states);

@@ -74,24 +74,24 @@ void simulate_season(std::vector<Team> &teams) {
 
 void display_results(std::vector<int> win_count,
                      std::vector<std::vector<int>> position_counts,
-                     std::vector<int> points_sum,
+                     std::vector<int> point_sums,
                      std::vector<Team> base_teams,
-                     int NUM_SIMS) {
+                     int num_sims) {
     std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
     for (int i = 0; i < NUM_TEAMS; i++) {
-        float win_prob = (float)win_count[i] / NUM_SIMS;
+        float win_prob = (float)win_count[i] / num_sims;
 
         float top_4_prob = 0.0f;
         for (int pos = 0; pos < 4; pos++) {
-            top_4_prob += (float)position_counts[i][pos] / NUM_SIMS;
+            top_4_prob += (float)position_counts[i][pos] / num_sims;
         }
 
         float relegation_prob = 0.0f;
         for (int pos = 17; pos < 20; pos++) {
-            relegation_prob += (float)position_counts[i][pos] / NUM_SIMS;
+            relegation_prob += (float)position_counts[i][pos] / num_sims;
         }
 
-        float avg_pts = points_sum[i] / (float)NUM_SIMS;
+        float avg_pts = point_sums[i] / (float)num_sims;
         std::cout << base_teams[i].name + " | "
                   << win_prob << " | "
                   << top_4_prob << " | "
@@ -101,7 +101,7 @@ void display_results(std::vector<int> win_count,
 }
 
 // run Monte Carlo simulation
-float run_cpu_simulation(int NUM_SIMS) {
+float run_cpu_simulation(int num_sims) {
     std::vector<Team> base_teams(NUM_TEAMS);
 
     // initialize base teams
@@ -115,11 +115,11 @@ float run_cpu_simulation(int NUM_SIMS) {
 
     std::vector<int> win_count(NUM_TEAMS, 0);
     std::vector<std::vector<int>> position_counts(NUM_TEAMS, std::vector<int>(NUM_TEAMS, 0));
-    std::vector<int> points_sum(NUM_TEAMS, 0);
+    std::vector<int> point_sums(NUM_TEAMS, 0);
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int t = 0; t < NUM_SIMS; t++) {
+    for (int t = 0; t < num_sims; t++) {
         std::vector<Team> teams = base_teams;
 
         simulate_season(teams);
@@ -145,13 +145,13 @@ float run_cpu_simulation(int NUM_SIMS) {
             position_counts[team][pos]++;
         }
         for (int i = 0; i < NUM_TEAMS; i++) {
-            points_sum[i] += teams[i].points;
+            point_sums[i] += teams[i].points;
         }
     }
 
     auto end = std::chrono::high_resolution_clock::now();
 
     std::chrono::duration<float> elapsed = end - start;
-    display_results(win_count, position_counts, points_sum, base_teams, NUM_SIMS);
+    display_results(win_count, position_counts, point_sums, base_teams, num_sims);
     return elapsed.count();
 }
