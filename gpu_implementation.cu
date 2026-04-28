@@ -24,6 +24,238 @@ __global__ void init_rng (unsigned int seed, curandState_t* states) {
         &states[tid]);
 }
 
+// multiple seasons per block
+__global__ void simulate_seasons_hybrid(
+    int* ratings,
+    int* win_counts,
+    int* position_counts,
+    int* point_sums,
+    curandState_t* states,
+    int num_sims,
+    int threads_per_season)
+{
+    const int tid = threadIdx.x;
+
+    const int seasons_per_block = blockDim.x / threads_per_season;
+    const int season_in_block = tid / threads_per_season;
+    const int lane = tid % threads_per_season;
+
+    const int global_season = blockIdx.x * seasons_per_block + season_in_block;
+    if (global_season >= num_sims) return;
+
+    int global_tid = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState_t localState = states[global_tid];
+
+    extern __shared__ int shared_mem[];
+    const int per_season = 4 * NUM_TEAMS;
+    int* season_base = shared_mem + season_in_block * per_season;
+    int* points = season_base;
+    int* goal_diff = points + NUM_TEAMS;
+    int* total_goals = goal_diff + NUM_TEAMS;
+    int* ranking = total_goals + NUM_TEAMS;
+
+    for (int i = lane; i < NUM_TEAMS; i += threads_per_season) {
+        points[i] = 0;
+        goal_diff[i] = 0;
+        total_goals[i] = 0;
+        ranking[i] = i;
+    }
+    __syncthreads();
+
+    int local_points[NUM_TEAMS] = {0};
+    int local_goal_diff[NUM_TEAMS] = {0};
+    int local_total_goals[NUM_TEAMS] = {0};
+
+    const int TOTAL_MATCHES = NUM_TEAMS * (NUM_TEAMS - 1);
+    for (int m = lane; m < TOTAL_MATCHES; m += threads_per_season) {
+        int i = m / (NUM_TEAMS - 1);
+        int j = m % (NUM_TEAMS - 1);
+        if (j >= i) j++;
+
+        const float base_goals = 1.3f;
+        const float k = 0.002f;
+        const float home_adv = 0.2f;
+
+        int diff = ratings[i] - ratings[j];
+
+        float lambdaA = base_goals * expf(k * diff) + home_adv;
+        float lambdaB = base_goals * expf(-k * diff);
+
+        int goalsA = curand_poisson(&localState, lambdaA);
+        int goalsB = curand_poisson(&localState, lambdaB);
+
+        local_goal_diff[i] += (goalsA - goalsB);
+        local_goal_diff[j] += (goalsB - goalsA);
+        local_total_goals[i] += goalsA;
+        local_total_goals[j] += goalsB;
+
+        if (goalsA > goalsB) {
+            local_points[i] += 3;
+        } else if (goalsB > goalsA) {
+            local_points[j] += 3;
+        } else {
+            local_points[i] += 1;
+            local_points[j] += 1;
+        }
+    }
+
+    for (int i = 0; i < NUM_TEAMS; i++) {
+        atomicAdd(&points[i], local_points[i]);
+        atomicAdd(&goal_diff[i], local_goal_diff[i]);
+        atomicAdd(&total_goals[i], local_total_goals[i]);
+    }
+    __syncthreads();
+
+    if (lane == 0) {
+        for (int i = 1; i < NUM_TEAMS; i++) {
+            int key = ranking[i];
+            int j = i - 1;
+
+            while (j >= 0) {
+                int a = ranking[j];
+
+                bool swap =
+                    (points[a] < points[key]) ||
+                    (points[a] == points[key] &&
+                     goal_diff[a] < goal_diff[key]) ||
+                    (points[a] == points[key] &&
+                     goal_diff[a] == goal_diff[key] &&
+                     total_goals[a] < total_goals[key]);
+
+                if (!swap) break;
+
+                ranking[j + 1] = ranking[j];
+                j--;
+            }
+            ranking[j + 1] = key;
+        }
+    }
+    __syncthreads();
+
+    if (lane == 0) {
+        int winner = ranking[0];
+        atomicAdd(&win_counts[winner], 1);
+
+        for (int i = 0; i < NUM_TEAMS; i++) {
+            atomicAdd(&point_sums[i], points[i]);
+        }
+
+        for (int pos = 0; pos < NUM_TEAMS; pos++) {
+            int team = ranking[pos];
+            atomicAdd(&position_counts[team * NUM_TEAMS + pos], 1);
+        }
+    }
+
+    states[global_tid] = localState;
+}
+
+// one block per season
+__global__ void simulate_seasons_block(
+    int* ratings,
+    int* win_counts,
+    int* position_counts,
+    int* point_sums,
+    curandState_t* states,
+    int num_sims) 
+{
+    int season_id = blockIdx.x;
+    if (season_id >= num_sims) return;
+
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState_t localState = states[tid];
+
+    extern __shared__ int shared_mem[];
+    int* points = shared_mem;
+    int* goal_diff = points + NUM_TEAMS;
+    int* total_goals = goal_diff + NUM_TEAMS;
+    int* ranking = total_goals + NUM_TEAMS;
+
+    for (int i = threadIdx.x; i < NUM_TEAMS; i += blockDim.x) {
+        points[i] = 0;
+        goal_diff[i] = 0;
+        total_goals[i] = 0;
+        ranking[i] = i;
+    }
+    __syncthreads();
+
+    const int TOTAL_MATCHES = NUM_TEAMS * (NUM_TEAMS - 1);
+
+    for (int m = threadIdx.x; m < TOTAL_MATCHES; m += blockDim.x) {
+        int i = m / (NUM_TEAMS - 1);
+        int j = m % (NUM_TEAMS - 1);
+        if (j >= i) j++;
+
+        const float base_goals = 1.3f;
+        const float k = 0.002f;
+        const float home_adv = 0.2f;
+
+        int diff = ratings[i] - ratings[j];
+
+        float lambdaA = base_goals * expf(k * diff) + home_adv;
+        float lambdaB = base_goals * expf(-k * diff);
+
+        int goalsA = curand_poisson(&localState, lambdaA);
+        int goalsB = curand_poisson(&localState, lambdaB);
+
+        // keep track of goal differential + total goals
+        atomicAdd(&goal_diff[i], goalsA - goalsB);
+        atomicAdd(&goal_diff[j], goalsB - goalsA);
+        atomicAdd(&total_goals[i], goalsA);
+        atomicAdd(&total_goals[j], goalsB);
+
+        if (goalsA > goalsB) {
+            atomicAdd(&points[i], 3);
+        }
+        else if (goalsB > goalsA) {
+            atomicAdd(&points[j], 3);
+        }
+        else {
+            atomicAdd(&points[i], 1);
+            atomicAdd(&points[j], 1);
+        }
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        for (int i = 1; i < NUM_TEAMS; i++) {
+            int key = ranking[i];
+            int j = i - 1;
+            while (j >= 0) {
+                int ptsJ = points[ranking[j]];
+                int ptsK = points[key];
+                int gdJ = goal_diff[ranking[j]];
+                int gdK = goal_diff[key];
+                int totalJ = total_goals[ranking[j]];
+                int totalK = total_goals[key];
+                bool should_swap = (ptsJ < ptsK) || (ptsJ == ptsK && gdJ < gdK) ||
+                                (ptsJ == ptsK && gdJ == gdK && totalJ < totalK);
+                if (!should_swap) {
+                    break;
+                }
+                ranking[j + 1] = ranking[j];
+                j--;
+            }
+            ranking[j + 1] = key;
+        }
+    }
+    __syncthreads();
+
+    if (threadIdx.x == 0) {
+        int winner = ranking[0];
+        atomicAdd(&win_counts[winner], 1);
+        for (int pos = 0; pos < NUM_TEAMS; pos++) {
+            int team = ranking[pos];
+            atomicAdd(&position_counts[team * NUM_TEAMS + pos], 1);
+        }
+        for (int i = 0; i < NUM_TEAMS; i++) {
+            atomicAdd(&point_sums[i], points[i]);
+        }
+    }
+
+    states[tid] = localState;
+}
+
+// one thread per season
 __global__ void simulate_seasons(
     int* ratings,
     int* win_counts,
@@ -33,7 +265,6 @@ __global__ void simulate_seasons(
     int num_sims)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
     if (tid >= num_sims) return;
 
     // load cuRAND state for thread
@@ -41,19 +272,13 @@ __global__ void simulate_seasons(
 
     // initialize local arrays
     int points[NUM_TEAMS];
-    for (int i = 0; i < NUM_TEAMS; i++) {
-        points[i] = 0;
-    }
     int goal_diff[NUM_TEAMS];
-    for (int i = 0; i < NUM_TEAMS; i++) {
-        goal_diff[i] = 0;
-    }
     int total_goals[NUM_TEAMS];
-    for (int i = 0; i < NUM_TEAMS; i++) {
-        total_goals[i] = 0;
-    }
     int ranking[NUM_TEAMS];
     for (int i = 0; i < NUM_TEAMS; i++) {
+        points[i] = 0;
+        goal_diff[i] = 0;
+        total_goals[i] = 0;
         ranking[i] = i;
     }
 
@@ -193,7 +418,7 @@ void display_results(std::vector<int> win_counts,
     }
 }
 
-float run_gpu_simulation(int num_sims, int block_size, unsigned int seed) {
+float run_gpu_simulation(int num_sims, int block_size, int threads_per_season, unsigned int seed, Version v) {
     // set static ratings for now 
     int h_ratings[NUM_TEAMS];
     for (int i = 0; i < NUM_TEAMS; i++) {
@@ -217,20 +442,50 @@ float run_gpu_simulation(int num_sims, int block_size, unsigned int seed) {
     cudaMemset(d_point_sums, 0, NUM_TEAMS * sizeof(int));
 
     curandState_t* d_states;
-    cudaMalloc(&d_states, num_sims * sizeof(curandState_t));
 
-    // set blocks based on block size
-    int blocks = (num_sims + block_size - 1) / block_size;
+    // set number of blocks
+    int blocks;
+    int seasons_per_block = block_size / threads_per_season;
+    if (v == Version::ThreadPerSeason) {
+        blocks = (num_sims + block_size - 1) / block_size;
+    }
+    else if (v == Version::Hybrid) {
+        blocks = (num_sims + seasons_per_block - 1) / seasons_per_block;
+    }
+    else {
+        blocks = num_sims;
+    }
+
+    // set shared memory size
+    size_t shared_mem;
+    if (v == Version::ThreadPerSeason) {
+        shared_mem = (NUM_TEAMS + NUM_TEAMS + NUM_TEAMS * NUM_TEAMS) * sizeof(int);
+    }
+    else if (v == Version::Hybrid) {
+        shared_mem = (4 * NUM_TEAMS) * seasons_per_block * sizeof(int);
+    }
+    else {
+        shared_mem = (4 * NUM_TEAMS) * sizeof(int);
+    }
 
     // initialize cuRAND states
+    cudaMalloc(&d_states, blocks * block_size * sizeof(curandState_t));
     init_rng<<<blocks, block_size>>>(seed, d_states);
-
-    size_t shared_mem = (NUM_TEAMS + NUM_TEAMS + NUM_TEAMS * NUM_TEAMS) * sizeof(int);
 
     // run + time simulation
     auto start = std::chrono::high_resolution_clock::now();
-    simulate_seasons<<<blocks, block_size, shared_mem>>>(
-        d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, num_sims);
+    if (v == Version::ThreadPerSeason) {
+        simulate_seasons<<<blocks, block_size, shared_mem>>>(
+            d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, num_sims);
+    }
+    else if (v == Version::Hybrid) {
+        simulate_seasons_hybrid<<<blocks, block_size, shared_mem>>>(
+            d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, num_sims, threads_per_season);
+    }
+    else {
+        simulate_seasons_block<<<blocks, block_size, shared_mem>>>(
+            d_ratings, d_win_counts, d_position_counts, d_point_sums, d_states, num_sims);
+    }
     cudaDeviceSynchronize();
     auto end = std::chrono::high_resolution_clock::now();
 
