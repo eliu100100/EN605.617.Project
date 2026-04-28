@@ -9,8 +9,6 @@
 
 const int NUM_TEAMS = 20;
 
-std::mt19937 rng(42);
-
 // team structure
 struct Team {
     int rating;
@@ -21,7 +19,7 @@ struct Team {
 };
 
 // simulate a single game
-void simulate_game(Team &A, Team &B) {
+void simulate_game(Team &A, Team &B, std::mt19937& rng) {
     const float base_goals = 1.3f;
     const float k = 0.002f;
     const float home_adv = 0.2f;
@@ -55,7 +53,7 @@ void simulate_game(Team &A, Team &B) {
 }
 
 // simulate one full season
-void simulate_season(std::vector<Team> &teams) {
+void simulate_season(std::vector<Team> &teams, std::mt19937& rng) {
     // reset points
     for (auto &t : teams) {
         t.points = 0;
@@ -66,8 +64,8 @@ void simulate_season(std::vector<Team> &teams) {
     // double round robin
     for (int i = 0; i < NUM_TEAMS; i++) {
         for (int j = i + 1; j < NUM_TEAMS; j++) {
-            simulate_game(teams[i], teams[j]);
-            simulate_game(teams[j], teams[i]);
+            simulate_game(teams[i], teams[j], rng);
+            simulate_game(teams[j], teams[i], rng);
         }
     }
 }
@@ -101,7 +99,7 @@ void display_results(std::vector<int> win_count,
 }
 
 // run Monte Carlo simulation
-float run_cpu_simulation(int num_sims) {
+float run_cpu_simulation(int num_sims, unsigned int seed) {
     std::vector<Team> base_teams(NUM_TEAMS);
 
     // initialize base teams
@@ -117,12 +115,15 @@ float run_cpu_simulation(int num_sims) {
     std::vector<std::vector<int>> position_counts(NUM_TEAMS, std::vector<int>(NUM_TEAMS, 0));
     std::vector<int> point_sums(NUM_TEAMS, 0);
 
+    // initialize rng
+    std::mt19937 rng(seed);
+
     auto start = std::chrono::high_resolution_clock::now();
 
     for (int t = 0; t < num_sims; t++) {
         std::vector<Team> teams = base_teams;
 
-        simulate_season(teams);
+        simulate_season(teams, rng);
 
         std::vector<int> ranking(NUM_TEAMS);
         std::iota(ranking.begin(), ranking.end(), 0);

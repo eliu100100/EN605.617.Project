@@ -42,13 +42,14 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
-    float cpu_time = 0.0f;;
+    unsigned int seed = time(NULL);
+    float cpu_time = 0.0f;
     if (run_cpu) {
         std::cout << "Running CPU version: \n";
-        float cpu_time = run_cpu_simulation(num_sims);
+        cpu_time = run_cpu_simulation(num_sims, seed);
     }
     std::cout << "Running GPU version: \n";
-    float gpu_time = run_gpu_simulation(num_sims, block_size);
+    float gpu_time = run_gpu_simulation(num_sims, block_size, seed);
 
     if (run_cpu) {
         std::cout << "\nCPU Execution time: " << cpu_time << " seconds\n";

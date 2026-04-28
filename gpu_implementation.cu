@@ -193,7 +193,7 @@ void display_results(std::vector<int> win_counts,
     }
 }
 
-float run_gpu_simulation(int num_sims, int block_size) {
+float run_gpu_simulation(int num_sims, int block_size, unsigned int seed) {
     // set static ratings for now 
     int h_ratings[NUM_TEAMS];
     for (int i = 0; i < NUM_TEAMS; i++) {
@@ -223,7 +223,7 @@ float run_gpu_simulation(int num_sims, int block_size) {
     int blocks = (num_sims + block_size - 1) / block_size;
 
     // initialize cuRAND states
-    init_rng<<<blocks, block_size>>>(42, d_states);
+    init_rng<<<blocks, block_size>>>(seed, d_states);
 
     size_t shared_mem = (NUM_TEAMS + NUM_TEAMS + NUM_TEAMS * NUM_TEAMS) * sizeof(int);
 
