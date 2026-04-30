@@ -29,17 +29,20 @@ void simulate_game(Team &A, Team &B, std::mt19937& rng) {
     float lambdaA = base_goals * std::exp(k * diff) + home_adv;
     float lambdaB = base_goals * std::exp(-k * diff);
 
+    // use poisson distribution to model goals scored
     std::poisson_distribution<int> distA(lambdaA);
     std::poisson_distribution<int> distB(lambdaB);
 
     int goalsA = distA(rng);
     int goalsB = distB(rng);
 
+    // keep track of goal differential and total goals
     A.goal_diff += (goalsA - goalsB);
     B.goal_diff += (goalsB - goalsA);
     A.total_goals += goalsA;
     B.total_goals += goalsB;
 
+    // update team points
     if (goalsA > goalsB) {
         A.points += 3;
     }
@@ -54,7 +57,7 @@ void simulate_game(Team &A, Team &B, std::mt19937& rng) {
 
 // simulate one full season
 void simulate_season(std::vector<Team> &teams, std::mt19937& rng) {
-    // reset points
+    // reset points, goal differential, total goals
     for (auto &t : teams) {
         t.points = 0;
         t.goal_diff = 0;
@@ -75,7 +78,9 @@ void display_results(std::vector<int> win_count,
                      std::vector<int> point_sums,
                      std::vector<Team> base_teams,
                      int num_sims) {
-    std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
+    printf("%-10s %10s %10s %10s %10s\n", "Team", "Win%", "Top4%", 
+        "Relegation%", "AvgPts");
+    //std::cout << "Team | Win Prob | Top 4 Prob | Relegation Prob | Avg Points\n";
     for (int i = 0; i < NUM_TEAMS; i++) {
         float win_prob = (float)win_count[i] / num_sims;
 
@@ -90,11 +95,14 @@ void display_results(std::vector<int> win_count,
         }
 
         float avg_pts = point_sums[i] / (float)num_sims;
-        std::cout << base_teams[i].name + " | "
-                  << win_prob << " | "
-                  << top_4_prob << " | "
-                  << relegation_prob << " | "
-                  << avg_pts << "\n";
+
+        printf("%-10s %10g %10g %10g %10.2f\n", base_teams[i].name.c_str(), 
+            win_prob, top_4_prob, relegation_prob, avg_pts);
+        // std::cout << base_teams[i].name + " | "
+        //           << win_prob << " | "
+        //           << top_4_prob << " | "
+        //           << relegation_prob << " | "
+        //           << avg_pts << "\n";
     }
 }
 
@@ -112,14 +120,15 @@ float run_cpu_simulation(int num_sims, unsigned int seed) {
     }
 
     std::vector<int> win_count(NUM_TEAMS, 0);
-    std::vector<std::vector<int>> position_counts(NUM_TEAMS, std::vector<int>(NUM_TEAMS, 0));
+    std::vector<std::vector<int>> position_counts(
+        NUM_TEAMS, std::vector<int>(NUM_TEAMS, 0));
     std::vector<int> point_sums(NUM_TEAMS, 0);
 
     // initialize rng
     std::mt19937 rng(seed);
 
+    // run + time simulation
     auto start = std::chrono::high_resolution_clock::now();
-
     for (int t = 0; t < num_sims; t++) {
         std::vector<Team> teams = base_teams;
 
@@ -149,10 +158,12 @@ float run_cpu_simulation(int num_sims, unsigned int seed) {
             point_sums[i] += teams[i].points;
         }
     }
-
     auto end = std::chrono::high_resolution_clock::now();
 
+    // print results
+    display_results(win_count, position_counts, point_sums, base_teams,
+        num_sims);
+
     std::chrono::duration<float> elapsed = end - start;
-    display_results(win_count, position_counts, point_sums, base_teams, num_sims);
     return elapsed.count();
 }

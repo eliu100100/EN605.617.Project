@@ -7,12 +7,13 @@
 #define DEFAULT_BLOCK_SIZE 256
 #define DEFAULT_THREADS_PER_SEASON 32
 
+// usage information for executable
 void print_usage(const char *prog) {
     printf("Usage: %s [options]\n", prog);
     printf("Options:\n");
-    printf("  -s <int>   Number of simulations                   (default: %d)\n", DEFAULT_SIMS);
-    printf("  -b <int>   CUDA block size                         (default: %d)\n", DEFAULT_BLOCK_SIZE);
-    printf("  -t <int>   Threads/simulation for hybrid version   (default: %d)\n", DEFAULT_BLOCK_SIZE);
+    printf("  -s <int>   Number of simulations              (default: %d)\n", DEFAULT_SIMS);
+    printf("  -b <int>   CUDA block size                    (default: %d)\n", DEFAULT_BLOCK_SIZE);
+    printf("  -t <int>   Threads/season for hybrid kernel   (default: %d)\n", DEFAULT_BLOCK_SIZE);
     printf("  --no-cpu   Skip CPU simulation\n");
     printf("  -h         Show this help\n");
 } 
@@ -22,6 +23,7 @@ int main(int argc, char** argv) {
     int block_size = DEFAULT_BLOCK_SIZE;
     int threads_per_season = DEFAULT_THREADS_PER_SEASON;
     int run_cpu = 1;
+    // parse cli arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
             num_sims = atoi(argv[++i]);
@@ -33,7 +35,7 @@ int main(int argc, char** argv) {
         }
         else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
             threads_per_season = atoi(argv[++i]);
-            printf("Threads per season changed to %d\n", block_size);
+            printf("Threads per season changed to %d\n", threads_per_season);
         }
         else if (strcmp(argv[i], "--no-cpu") == 0) {
             run_cpu = 0;
@@ -49,37 +51,44 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+
+    // use current time as rng seed
     unsigned int seed = time(NULL);
+
     float cpu_time = 0.0f;
     if (run_cpu) {
-        std::cout << "Running CPU version: \n";
+        printf("Running CPU version: \n");
         cpu_time = run_cpu_simulation(num_sims, seed);
+        printf("\n");
     }
-    std::cout << "Running GPU version: \n";
-    float gpu_time = run_gpu_simulation(num_sims, block_size, threads_per_season, seed, Version::ThreadPerSeason);
 
-    std::cout << "Running GPU block version: \n";
-    float gpu_block_time = run_gpu_simulation(num_sims, block_size, threads_per_season, seed, Version::BlockPerSeason);
+    printf("Running GPU version: \n");
+    float gpu_time = run_gpu_simulation(num_sims, block_size,
+        threads_per_season, seed, Version::ThreadPerSeason);
 
-    std::cout << "Running GPU hybrid version: \n";
-    float gpu_hybrid_time = run_gpu_simulation(num_sims, block_size, threads_per_season, seed, Version::Hybrid);
+    printf("\nRunning GPU block version: \n");
+    float gpu_block_time = run_gpu_simulation(num_sims, block_size,
+        threads_per_season, seed, Version::BlockPerSeason);
 
+    printf("\nRunning GPU hybrid version: \n");
+    float gpu_hybrid_time = run_gpu_simulation(num_sims, block_size,
+        threads_per_season, seed, Version::Hybrid);
+
+    printf("\n");
+    printf("==============================================================\n");
+    printf(" PERFORMANCE SUMMARY\n");
+    printf("==============================================================\n");
+    printf(" %-20s %12s %18s\n", "Sim Version", "Time (s)", "Sims/Sec");
     if (run_cpu) {
-        std::cout << "\nCPU Execution time: " << cpu_time << " seconds\n";
-        std::cout << "CPU Simulations per second: "
-            << num_sims / cpu_time << "\n";
+        printf(" %-20s %12f %18g\n", "CPU", cpu_time, num_sims / cpu_time);
     }
-    std::cout << "\nGPU Execution time: " << gpu_time << " seconds\n";
-    std::cout << "GPU Simulations per second: "
-          << num_sims / gpu_time << "\n";
+    printf(" %-20s %12f %18g\n", "GPU", gpu_time, num_sims / gpu_time);
     
-    std::cout << "\nGPU Block Execution time: " << gpu_block_time << " seconds\n";
-    std::cout << "GPU Block Simulations per second: "
-          << num_sims / gpu_block_time << "\n";
+    printf(" %-20s %12f %18g\n", "GPU Block", gpu_block_time,
+        num_sims / gpu_block_time);
 
-    std::cout << "\nGPU Hybrid Execution time: " << gpu_hybrid_time << " seconds\n";
-    std::cout << "GPU Hybrid Simulations per second: "
-          << num_sims / gpu_hybrid_time << "\n";
+    printf(" %-20s %12f %18g\n", "GPU Hybrid", gpu_hybrid_time,
+        num_sims / gpu_hybrid_time);
 
     return 0;
 }
