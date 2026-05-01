@@ -98,11 +98,6 @@ void display_results(std::vector<int> win_count,
 
         printf("%-10s %10g %10g %10g %10.2f\n", base_teams[i].name.c_str(), 
             win_prob, top_4_prob, relegation_prob, avg_pts);
-        // std::cout << base_teams[i].name + " | "
-        //           << win_prob << " | "
-        //           << top_4_prob << " | "
-        //           << relegation_prob << " | "
-        //           << avg_pts << "\n";
     }
 }
 

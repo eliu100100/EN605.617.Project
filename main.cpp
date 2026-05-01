@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
     if (run_cpu) {
         printf(" %-20s %12f %18g\n", "CPU", cpu_time, num_sims / cpu_time);
     }
-    printf(" %-20s %12f %18g\n", "GPU", gpu_time, num_sims / gpu_time);
+    printf(" %-20s %12f %18g\n", "GPU Thread", gpu_time, num_sims / gpu_time);
     
     printf(" %-20s %12f %18g\n", "GPU Block", gpu_block_time,
         num_sims / gpu_block_time);
