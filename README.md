@@ -100,6 +100,14 @@ Example:
 ---
 
 ## Sample Output
+
 ![sample output](./sample%20output.PNG)  
 
-![](./sample%20performance.PNG)
+![sample performance](./sample%20performance.PNG)
+
+---
+
+## References
+
+1. Nguyen, Quang. "Poisson modeling and predicting English Premier League goal scoring." arXiv preprint arXiv:2105.09881 (2021).
+2. https://en.wikipedia.org/wiki/Premier_League
