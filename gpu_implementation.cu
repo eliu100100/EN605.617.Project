@@ -330,12 +330,14 @@ __global__ void simulate_seasons(
     __syncthreads();
 
     // use shared memory to update global results
-    for (int i = threadIdx.x; i < NUM_TEAMS; i += blockDim.x) {
-        atomicAdd(&win_counts[i], s_win_counts[i]);
-        atomicAdd(&point_sums[i], s_point_sums[i]);
-    }
-    for (int i = threadIdx.x; i < NUM_TEAMS * NUM_TEAMS; i += blockDim.x) {
-        atomicAdd(&position_counts[i], s_position_counts[i]);
+    if (threadIdx.x == 0) {
+        for (int i = 0; i < NUM_TEAMS; i += 1) {
+            atomicAdd(&win_counts[i], s_win_counts[i]);
+            atomicAdd(&point_sums[i], s_point_sums[i]);
+        }
+        for (int i = 0; i < NUM_TEAMS * NUM_TEAMS; i += 1) {
+            atomicAdd(&position_counts[i], s_position_counts[i]);
+        }
     }
 
     states[tid] = localState;
